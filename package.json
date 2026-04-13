@@ -15,7 +15,13 @@
     "crypto"
   ],
   "harmony": {
-    "alias": "react-native-rsa-native"
+    "alias": "react-native-rsa-native",
+    "autolinking": {
+      "etsPackageClassName": "RNRSAPackage",
+      "cppPackageClassName": "RTNRsaNativePackage",
+      "cmakeLibraryTargetName": "rnoh_rsa_native",
+      "ohPackageName": "@react-native-ohos/react-native-rsa-native"
+    }
   },
   "files": [
     "index.js",
