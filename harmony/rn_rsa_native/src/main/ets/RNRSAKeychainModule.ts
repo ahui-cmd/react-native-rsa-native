@@ -51,8 +51,20 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
       const signPurposes = huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_SIGN |
       huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_VERIFY;
 
-      await this.generateHUKSKey(encryptKeyTag, keySize, encryptPurposes, 'RSA');
-      await this.generateHUKSKey(signKeyTag, keySize, signPurposes, 'RSA');
+      await this.generateHUKSKey(
+        encryptKeyTag,
+        keySize,
+        encryptPurposes,
+        'RSA',
+        huks.HuksKeyStorageType.HUKS_STORAGE_ONLY_USED_IN_HUKS
+      );
+      await this.generateHUKSKey(
+        signKeyTag,
+        keySize,
+        signPurposes,
+        'RSA',
+        huks.HuksKeyStorageType.HUKS_STORAGE_KEY_EXPORT_ALLOWED
+      );
       const publicKey = await this.encodedPublicKeyDER(keyTag);
       return { public: publicKey };
     }
@@ -66,8 +78,13 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     }
   }
 
-  private async generateHUKSKey(alias: string, keySize: number, purposes: number,
-    algorithmType: string): Promise<void> {
+  private async generateHUKSKey(
+    alias: string,
+    keySize: number,
+    purposes: number,
+    algorithmType: string,
+    storageFlag: number = huks.HuksKeyStorageType.HUKS_STORAGE_KEY_EXPORT_ALLOWED
+  ): Promise<void> {
     const rsaKeySizeMap = {
       512: huks.HuksKeySize.HUKS_RSA_KEY_SIZE_512,
       768: huks.HuksKeySize.HUKS_RSA_KEY_SIZE_768,
@@ -90,19 +107,35 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
       { tag: huks.HuksTag.HUKS_TAG_PADDING, value: huks.HuksKeyPadding.HUKS_PADDING_PKCS1_V1_5 },
       {
         tag: huks.HuksTag.HUKS_TAG_KEY_STORAGE_FLAG,
-        value: huks.HuksKeyStorageType.HUKS_STORAGE_KEY_EXPORT_ALLOWED
+        value: storageFlag
       },
       {
         tag: huks.HuksTag.HUKS_TAG_IS_KEY_ALIAS,
         value: true
       },
     ];
+    const rsaCipherPurposes =
+      huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_ENCRYPT | huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_DECRYPT;
+    if (algorithmType === 'RSA' && (purposes & rsaCipherPurposes) !== 0) {
+      properties.push(
+        { tag: huks.HuksTag.HUKS_TAG_DIGEST, value: huks.HuksKeyDigest.HUKS_DIGEST_SHA256 },
+        { tag: huks.HuksTag.HUKS_TAG_BLOCK_MODE, value: huks.HuksCipherMode.HUKS_MODE_ECB }
+      );
+    }
 
     const options: huks.HuksOptions = { properties };
     return new Promise<void>((resolve, reject) => {
-      huks.isKeyItemExist(alias, options, (existError, existResult) => {
+      const existCheckOptions: huks.HuksOptions = { properties: [] };
+      huks.isKeyItemExist(alias, existCheckOptions, (existError, existResult) => {
         if (existError) {
-          Logger.error(TAG, `existError`);
+          const r = existError as unknown as Record<string, number | string | undefined>;
+          const code = r.code ?? r.errorCode ?? r.errCode;
+          const codeNum = Number(code ?? 0);
+          const message = (r.message ?? r.errorMessage ?? r.msg);
+          if (codeNum !== 12000011) {
+            reject(new Error(`isKeyItemExist failed: code=${code} message=${message}`));
+            return;
+          }
         }
         if (existResult) {
           Logger.info(TAG, `existResult`);
@@ -111,10 +144,12 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
         }
         huks.generateKeyItem(alias, options, (error: any) => {
           if (error) {
-            Logger.error(TAG, `failed:`, error);
-            reject(new Error(`failed: ${error.message || error}`));
+            const r = error as unknown as Record<string, number | string | undefined>;
+            const code = r.code ?? r.errorCode ?? r.errCode;
+            const message = (r.message ?? r.errorMessage ?? r.msg);
+            reject(new Error(`generateKeyItem failed: code=${code} message=${message}`));
           } else {
-            Logger.info(TAG, `failed`);
+            Logger.info(TAG, `generateKeyItem ok`);
             resolve();
           }
         });
@@ -140,6 +175,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
         { tag: huks.HuksTag.HUKS_TAG_ALGORITHM, value: huks.HuksKeyAlg.HUKS_ALG_RSA },
         { tag: huks.HuksTag.HUKS_TAG_PURPOSE, value: huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_ENCRYPT },
         { tag: huks.HuksTag.HUKS_TAG_PADDING, value: huks.HuksKeyPadding.HUKS_PADDING_PKCS1_V1_5 },
+        { tag: huks.HuksTag.HUKS_TAG_DIGEST, value: huks.HuksKeyDigest.HUKS_DIGEST_SHA256 },
         { tag: huks.HuksTag.HUKS_TAG_BLOCK_MODE, value: huks.HuksCipherMode.HUKS_MODE_ECB },
       ];
 
@@ -158,6 +194,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
           if (finishError) {
             Logger.error(`finishSession failed:`, JSON.stringify(finishError));
             this.abortHuksSession(handle);
+            reject(new Error(`finishSession failed: ${JSON.stringify(finishError)}`));
             return;
           }
 
@@ -206,6 +243,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
         { tag: huks.HuksTag.HUKS_TAG_ALGORITHM, value: huks.HuksKeyAlg.HUKS_ALG_RSA },
         { tag: huks.HuksTag.HUKS_TAG_PURPOSE, value: huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_DECRYPT },
         { tag: huks.HuksTag.HUKS_TAG_PADDING, value: huks.HuksKeyPadding.HUKS_PADDING_PKCS1_V1_5 },
+        { tag: huks.HuksTag.HUKS_TAG_DIGEST, value: huks.HuksKeyDigest.HUKS_DIGEST_SHA256 },
         { tag: huks.HuksTag.HUKS_TAG_BLOCK_MODE, value: huks.HuksCipherMode.HUKS_MODE_ECB },
       ];
 
@@ -223,6 +261,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
           if (finishError) {
             Logger.error(`finishSession for decrypt failed:`, JSON.stringify(finishError, null, 2));
             this.abortHuksSession(handle);
+            reject(new Error(`finishSession failed: ${JSON.stringify(finishError)}`));
             return;
           }
 
